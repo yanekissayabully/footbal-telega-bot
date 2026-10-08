@@ -22,8 +22,8 @@ load_dotenv()
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL_ID = os.environ["CHANNEL_ID"]
-MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "4"))
-MAX_PREVIEWS_PER_RUN = int(os.getenv("MAX_PREVIEWS_PER_RUN", "2"))
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "5"))  # максимум постов в сутки (по Бразилии), прогревы входят
+MAX_PREVIEWS_PER_RUN = int(os.getenv("MAX_PREVIEWS_PER_RUN", "1"))
 MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "16"))
 POST_DELAY_MIN = float(os.getenv("POST_DELAY_MIN", "15"))  # пауза между постами, минуты
 POST_DELAY_MAX = float(os.getenv("POST_DELAY_MAX", "30"))
@@ -119,6 +119,9 @@ SLOT_PLANS = {
     "evening": ["br", "europa", "fofoca", "mercado"],
 }
 
+# накопительный лимит к концу окна: к обеду не больше 4, к вечеру 5 (невыбранное переносится дальше)
+SLOT_CAPS = {"morning": 2, "lunch": 4, "evening": 5}
+
 RUBRICS = {
     "br": ("🇧🇷", "FUTEBOL BRASILEIRO", "#Brasileirão #FutebolBrasileiro"),
     "eur": ("🌍", "FUTEBOL EUROPEU", "#FutebolEuropeu"),
@@ -186,9 +189,23 @@ class Seen:
         self.data.setdefault(uid, int(time.time()))
         self.save()
 
+    @staticmethod
+    def _day_key() -> str:
+        return "__posts__:" + datetime.now(BRT).strftime("%Y-%m-%d")
+
+    def posts_today(self) -> int:
+        """Сколько постов уже вышло сегодня (по Бразилии)."""
+        return self.data.get(self._day_key(), 0)
+
+    def count_post(self) -> None:
+        self.data[self._day_key()] = self.posts_today() + 1
+        self.save()
+
     def prune(self, days: int = 14) -> None:
         cutoff = time.time() - days * 86400
-        self.data = {k: v for k, v in self.data.items() if v >= cutoff}
+        self.data = {k: v for k, v in self.data.items() if k.startswith("__") or v >= cutoff}
+        self.data = {k: v for k, v in self.data.items()
+                     if not k.startswith("__posts__:") or k >= "__posts__:" + (datetime.now(BRT) - timedelta(days=3)).strftime("%Y-%m-%d")}
         self.save()
 
     def save(self) -> None:
@@ -530,10 +547,10 @@ def preview_item(m: dict, news: list[dict]) -> dict:
     return item
 
 
-def post_previews(seen: Seen, news: list[dict]) -> int:
+def post_previews(seen: Seen, news: list[dict], limit: int) -> int:
     posted = 0
     for m in fetch_top_matches():
-        if posted >= MAX_PREVIEWS_PER_RUN:
+        if posted >= limit:
             break
         uid = f"preview:{m['id']}"
         if uid in seen:
@@ -542,6 +559,7 @@ def post_previews(seen: Seen, news: list[dict]) -> int:
         if item and send(item):
             log.info("прогрев: %s x %s (%s)", m["home"]["displayName"], m["away"]["displayName"], m["league"])
             seen.add(uid)
+            seen.count_post()
             posted += 1
         else:
             log.error("прогрев не отправлен: %s x %s", m["home"]["displayName"], m["away"]["displayName"])
@@ -570,7 +588,6 @@ def pick(fresh: list[dict], plan: list[str]) -> list[dict]:
 
 def run_once(seen: Seen) -> None:
     slot = current_slot()
-    plan = SLOT_PLANS[slot][:MAX_POSTS_PER_RUN]
     cands = fetch_candidates(seen)
     for c in cands:
         if not c["fresh"]:
@@ -578,10 +595,22 @@ def run_once(seen: Seen) -> None:
     fresh = [c for c in cands if c["fresh"]]
     log.info("окно %s, свежих кандидатов: %d", slot, len(fresh))
 
+    left = DAILY_LIMIT - seen.posts_today()
+    log.info("сегодня уже %d из %d постов", seen.posts_today(), DAILY_LIMIT)
+    if left <= 0:
+        seen.prune()
+        return
+
+    previews = 0
     try:
-        post_previews(seen, cands)
+        previews = post_previews(seen, cands, min(MAX_PREVIEWS_PER_RUN, left))
     except Exception:
         log.exception("ошибка в прогревах")
+
+    # прогревы входят в лимит; остаток окна и дня отдаём новостям
+    base = SLOT_PLANS[slot]
+    shift = datetime.now(BRT).timetuple().tm_yday % len(base)  # меняем рубрики день ото дня
+    plan = (base[shift:] + base[:shift])[:max(0, min(SLOT_CAPS[slot], DAILY_LIMIT) - seen.posts_today())]
 
     posted = 0
     failed = 0
@@ -603,6 +632,7 @@ def run_once(seen: Seen) -> None:
                 log.info("опубликовано [%s]: %s", c["cat"], c["title"])
                 posted += 1
                 seen.add(c["uid"])
+                seen.count_post()
             else:
                 failed += 1
                 log.error("не удалось отправить, повторю в следующий раз: %s", c["title"])
