@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import random
 import re
 import sys
 import time
@@ -24,6 +25,8 @@ CHANNEL_ID = os.environ["CHANNEL_ID"]
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "4"))
 MAX_PREVIEWS_PER_RUN = int(os.getenv("MAX_PREVIEWS_PER_RUN", "2"))
 MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "16"))
+POST_DELAY_MIN = float(os.getenv("POST_DELAY_MIN", "15"))  # пауза между постами, минуты
+POST_DELAY_MAX = float(os.getenv("POST_DELAY_MAX", "30"))
 SLOT_OVERRIDE = os.getenv("SLOT", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or "gpt-4o-mini"
@@ -337,7 +340,26 @@ def build_caption(item: dict) -> str:
     return head + body + tail
 
 
+_sent = 0
+
+
+def pace() -> None:
+    """Пауза перед очередным постом (кроме первого за запуск), чтобы не сыпать пачкой."""
+    if _sent:
+        pause = random.uniform(POST_DELAY_MIN, POST_DELAY_MAX) * 60
+        log.info("пауза %.0f мин до следующего поста", pause / 60)
+        time.sleep(pause)
+
+
 def send(item: dict) -> bool:
+    global _sent
+    pace()
+    ok = _send(item)
+    _sent += ok
+    return ok
+
+
+def _send(item: dict) -> bool:
     caption = build_caption(item)
     api = f"https://api.telegram.org/bot{BOT_TOKEN}"
     form = {"chat_id": CHANNEL_ID, "caption": caption, "parse_mode": "HTML"}
@@ -521,7 +543,6 @@ def post_previews(seen: Seen, news: list[dict]) -> int:
             log.info("прогрев: %s x %s (%s)", m["home"]["displayName"], m["away"]["displayName"], m["league"])
             seen.add(uid)
             posted += 1
-            time.sleep(3)
         else:
             log.error("прогрев не отправлен: %s x %s", m["home"]["displayName"], m["away"]["displayName"])
     return posted
@@ -582,7 +603,6 @@ def run_once(seen: Seen) -> None:
                 log.info("опубликовано [%s]: %s", c["cat"], c["title"])
                 posted += 1
                 seen.add(c["uid"])
-                time.sleep(3)
             else:
                 failed += 1
                 log.error("не удалось отправить, повторю в следующий раз: %s", c["title"])
