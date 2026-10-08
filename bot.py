@@ -23,6 +23,8 @@ CHANNEL_ID = os.environ["CHANNEL_ID"]
 MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "4"))
 MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "16"))
 SLOT_OVERRIDE = os.getenv("SLOT", "").strip()
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or "gpt-4o-mini"
 FOOTER = os.getenv("FOOTER", "").strip()
 POST_WITHOUT_IMAGE = os.getenv("POST_WITHOUT_IMAGE", "0") == "1"
 
@@ -223,19 +225,66 @@ def fetch_candidates(seen: Seen) -> list[dict]:
     return out
 
 
-def build_caption(title: str, summary: str) -> str:
-    tail = f"\n\n{FOOTER}" if FOOTER else ""
-    head = f"<b>{html.escape(title)}</b>"
+RUBRICS = {
+    "br": ("🇧🇷", "FUTEBOL BRASILEIRO", "#Brasileirão #FutebolBrasileiro"),
+    "eur": ("🌍", "EUROPA & CHAMPIONS", "#Champions #FutebolEuropeu"),
+    "latam": ("🌎", "AMÉRICA LATINA", "#Libertadores #SulAmericana"),
+    "mercado": ("🔁", "MERCADO DA BOLA", "#MercadoDaBola #Transferências"),
+    "escandalo": ("🚨", "POLÊMICA", "#Polêmica #Futebol"),
+    "fofoca": ("🔥", "BASTIDORES", "#Bastidores #Futebol"),
+}
+
+SYSTEM_PROMPT = (
+    "Você é redator de um canal de Telegram de futebol para o público brasileiro. "
+    "Reescreva a notícia recebida em português do Brasil, com texto próprio e envolvente, "
+    "tom de torcedor bem informado, sem copiar frases do original. "
+    "Regras: use SOMENTE fatos presentes no material, não invente nada (placares, nomes, valores); "
+    "em temas de polêmica ou vida pessoal, deixe claro quando algo é alegação ou 'segundo a imprensa' "
+    "e nunca afirme como fato o que não está confirmado; "
+    "não cite o veículo de origem, não inclua links nem hashtags; "
+    "no máximo 1 ou 2 emojis relevantes no corpo. "
+    'Responda em JSON: {"title": "manchete curta e chamativa, até 90 caracteres", '
+    '"body": "2 a 4 frases curtas, até 450 caracteres"}'
+)
+
+
+def ai_rewrite(item: dict) -> bool:
+    """Переписывает заголовок и текст через OpenAI. False — если не вышло."""
+    material = f"Categoria: {item['cat']}\nTítulo: {item['title']}\nResumo: {item['summary']}"
+    try:
+        r = session.post(
+            "https://api.openai.com/v1/chat/completions", timeout=60,
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": OPENAI_MODEL, "response_format": {"type": "json_object"},
+                  "messages": [{"role": "system", "content": SYSTEM_PROMPT},
+                               {"role": "user", "content": material}]})
+        r.raise_for_status()
+        data = json.loads(r.json()["choices"][0]["message"]["content"])
+        title, body = clean(data["title"]), clean(data["body"])
+    except (requests.RequestException, KeyError, IndexError, ValueError) as e:
+        log.error("OpenAI не ответил нормально: %s", e)
+        return False
+    if not title or not body:
+        return False
+    item["title"], item["summary"] = title[:120], body[:600]
+    return True
+
+
+def build_caption(item: dict) -> str:
+    emoji, name, tags = RUBRICS.get(item["cat"], RUBRICS["br"])
+    head = f"{emoji} <b>{name}</b>\n\n<b>{html.escape(item['title'])}</b>"
+    tail = f"\n\n{tags}" + (f"\n\n{FOOTER}" if FOOTER else "")
     room = CAPTION_LIMIT - len(head) - len(tail) - 4
     body = ""
-    if summary and summary != title and room > 40:
+    summary = item["summary"]
+    if summary and summary != item["title"] and room > 40:
         s = summary if len(summary) <= room else summary[: room - 1].rsplit(" ", 1)[0] + "…"
         body = "\n\n" + html.escape(s)
     return head + body + tail
 
 
 def send(item: dict) -> bool:
-    caption = build_caption(item["title"], item["summary"])
+    caption = build_caption(item)
     api = f"https://api.telegram.org/bot{BOT_TOKEN}"
     if item["image"]:
         r = session.post(f"{api}/sendPhoto", timeout=30, data={
@@ -302,6 +351,9 @@ def run_once(seen: Seen) -> None:
             if not c["image"] and not POST_WITHOUT_IMAGE:
                 log.info("нет картинки, пропускаю: %s", c["title"])
                 seen.add(c["uid"])
+                continue
+            if OPENAI_API_KEY and not ai_rewrite(c):
+                failed += 1
                 continue
             if send(c):
                 log.info("опубликовано [%s]: %s", c["cat"], c["title"])
