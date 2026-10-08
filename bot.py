@@ -1,12 +1,13 @@
 import html
 import io
+import json
 import logging
 import os
-import json
 import re
 import sys
 import time
 from calendar import timegm
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import feedparser
@@ -19,9 +20,9 @@ load_dotenv()
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL_ID = os.environ["CHANNEL_ID"]
-POLL_MINUTES = float(os.getenv("POLL_MINUTES", "10"))
-MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "3"))
-MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "6"))
+MAX_POSTS_PER_RUN = int(os.getenv("MAX_POSTS_PER_RUN", "4"))
+MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "16"))
+SLOT_OVERRIDE = os.getenv("SLOT", "").strip()
 FOOTER = os.getenv("FOOTER", "").strip()
 POST_WITHOUT_IMAGE = os.getenv("POST_WITHOUT_IMAGE", "0") == "1"
 
@@ -29,22 +30,68 @@ STATE_PATH = Path(__file__).with_name("seen.json")
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 CAPTION_LIMIT = 1024
 
-# (url, нужен ли фильтр по футбольным словам — для лент про все виды спорта)
+# (url, нужен ли фильтр по футбольным словам, категория по умолчанию)
+# br — бразильские турниры, eur — Европа (топ-5 + ЛЧ), latam — Латинская Америка
 FEEDS = [
-    ("https://ge.globo.com/rss/ge/futebol/", False),
-    ("https://trivela.com.br/feed/", False),
-    ("https://www.gazetaesportiva.com/feed/", True),
-    ("https://www.torcedores.com/feed", True),
-    ("https://www.placar.com.br/feed/", True),
+    ("https://ge.globo.com/rss/ge/futebol/brasileirao-serie-a/", False, "br"),
+    ("https://ge.globo.com/rss/ge/futebol/brasileirao-serie-b/", False, "br"),
+    ("https://ge.globo.com/rss/ge/futebol/copa-do-brasil/", False, "br"),
+    ("https://ge.globo.com/rss/ge/futebol/selecao-brasileira/", False, "br"),
+    ("https://ge.globo.com/rss/ge/futebol/futebol-internacional/", False, "eur"),
+    ("https://ge.globo.com/rss/ge/futebol/libertadores/", False, "latam"),
+    ("https://ge.globo.com/rss/ge/futebol/copa-sul-americana/", False, "latam"),
+    ("https://ge.globo.com/rss/ge/futebol/mercado-da-bola/", False, "mercado"),
+    ("https://trivela.com.br/feed/", False, "eur"),
+    ("https://www.metropoles.com/esportes/futebol/feed", False, "br"),
+    ("https://www.metropoles.com/celebridades/feed", True, "fofoca"),
+    ("https://www.gazetaesportiva.com/feed/", True, "br"),
+    ("https://www.torcedores.com/feed", True, "br"),
 ]
 
 FOOTBALL_RE = re.compile(
     r"futebol|brasileir[aã]o|libertadores|sul-americana|copa do brasil|sele[cç][aã]o|"
     r"flamengo|palmeiras|corinthians|s[aã]o paulo|santos|fluminense|vasco|botafogo|"
     r"gr[eê]mio|internacional|cruzeiro|atl[eé]tico|bahia|fortaleza|athletico|"
-    r"champions|premier league|la liga|neymar|vin[ií]cius|gol\b|t[eé]cnico|rodada",
+    r"champions|premier league|la liga|neymar|vin[ií]cius|gol\b|t[eé]cnico|rodada|"
+    r"jogador|atleta|craque|boleiro|zagueiro|atacante|goleiro|meia\b|lateral",
     re.I,
 )
+
+# порядок проверки важен: сначала «острые» темы, потом лиги
+CATEGORY_RES = [
+    ("escandalo", re.compile(
+        r"pol[eê]mic|esc[aâ]ndalo|\bbriga\b|brigam|confus[aã]o|pancadaria|agress|racis|inj[uú]ria|homofob|"
+        r"den[uú]ncia|acusad|investiga|pol[ií]cia|preso\b|doping|manipula[cç][aã]o|"
+        r"puni[cç][aã]o|stjd|expuls|revolta|protesto|tumulto|insatisf", re.I)),
+    ("fofoca", re.compile(
+        r"namor|casament|casad[oa]|separa[cç][aã]o|div[oó]rcio|trai[cç][aã]o|affair|romance|"
+        r"beijo|balada|esposa|mulher d[eo]|marido|bastidores|vida pessoal|influenciador|"
+        r"barraco|fofoca|viraliza|casal|\bex-(mulher|namorada)", re.I)),
+    ("mercado", re.compile(
+        r"transfer|contrata[cç][aã]o|contratar|refor[cç]o|negocia|proposta|mercado da bola|"
+        r"empr[eé]stimo|renova|rescis|acerta com|fecha com|sondag|especula|assina com|"
+        r"cl[aá]usula|janela", re.I)),
+    ("eur", re.compile(
+        r"premier league|campeonato ingl|la ?liga|campeonato espanhol|campeonato italiano|"
+        r"s[eé]rie a da it[aá]lia|bundesliga|campeonato alem|ligue 1|campeonato franc|"
+        r"liga dos campe|champions|real madrid|barcelona|manchester|liverpool|arsenal|chelsea|"
+        r"tottenham|bayern|dortmund|\bpsg\b|juventus|\bmilan\b|napoli|mbapp|haaland|bellingham", re.I)),
+    ("latam", re.compile(
+        r"libertadores|sul-americana|conmebol|argentin|boca juniors|river plate|col[oô]mbia|"
+        r"uruguai|chile\b|paraguai|equador|bol[ií]via|venezuela|m[eé]xico|liga mx|"
+        r"eliminat[oó]rias|copa am[eé]rica|pe[nñ]arol|atl[eé]tico nacional", re.I)),
+    ("br", re.compile(
+        r"brasileir[aã]o|s[eé]rie [ab]\b|copa do brasil|paulist[aã]o|carioca|ga[uú]cho|mineiro|"
+        r"sele[cç][aã]o brasileira|flamengo|palmeiras|corinthians|s[aã]o paulo|santos|"
+        r"fluminense|vasco|botafogo|gr[eê]mio|cruzeiro|bahia|fortaleza|athletico", re.I)),
+]
+
+# что постим в каждое окно (время по Бразилии); если категории пусты — добираем любыми
+SLOT_PLANS = {
+    "morning": ["eur", "br", "mercado", "latam"],
+    "lunch": ["br", "mercado", "escandalo", "latam"],
+    "evening": ["br", "eur", "fofoca", "mercado"],
+}
 
 log = logging.getLogger("bot")
 session = requests.Session()
@@ -123,6 +170,21 @@ def page_meta(url: str) -> tuple[str | None, str | None]:
     return (img.get("content") if img else None), (desc.get("content") if desc else None)
 
 
+def classify(text: str, default: str) -> str:
+    for name, rx in CATEGORY_RES:
+        if rx.search(text):
+            return name
+    return default
+
+
+def current_slot() -> str:
+    if SLOT_OVERRIDE in SLOT_PLANS:
+        return SLOT_OVERRIDE
+    # Бразилия: UTC-3, летнее время отменено
+    hour = (datetime.now(timezone.utc) + timedelta(hours=-3)).hour
+    return "morning" if hour < 12 else "lunch" if hour < 17 else "evening"
+
+
 def published_ts(entry) -> float:
     t = entry.get("published_parsed") or entry.get("updated_parsed")
     return timegm(t) if t else time.time()
@@ -130,8 +192,9 @@ def published_ts(entry) -> float:
 
 def fetch_candidates(seen: Seen) -> list[dict]:
     out = []
+    seen_now: set[str] = set()
     cutoff = time.time() - MAX_AGE_HOURS * 3600
-    for url, need_filter in FEEDS:
+    for url, need_filter, default_cat in FEEDS:
         try:
             r = session.get(url, timeout=20)
             r.raise_for_status()
@@ -144,16 +207,19 @@ def fetch_candidates(seen: Seen) -> list[dict]:
             if not link:
                 continue
             uid = e.get("id") or link
-            if uid in seen:
+            if uid in seen or uid in seen_now:
                 continue
             ts = published_ts(e)
             title = clean(e.get("title", ""))
             summary = clean(e.get("summary", ""))
             cats = " ".join(t.get("term", "") for t in e.get("tags", []) or [])
-            if need_filter and not FOOTBALL_RE.search(f"{title} {summary} {cats}"):
+            text = f"{title} {cats}"
+            if need_filter and not FOOTBALL_RE.search(f"{text} {summary}"):
                 continue
+            seen_now.add(uid)
             out.append({"uid": uid, "link": link, "title": title, "summary": summary,
-                        "ts": ts, "fresh": ts >= cutoff, "image": entry_image(e)})
+                        "ts": ts, "fresh": ts >= cutoff, "image": entry_image(e),
+                        "cat": classify(text, default_cat)})
     return out
 
 
@@ -197,59 +263,65 @@ def send(item: dict) -> bool:
     return False
 
 
+def pick(fresh: list[dict], plan: list[str]) -> list[dict]:
+    """По одной свежей новости на категорию из плана, остаток добираем любыми."""
+    pool = sorted(fresh, key=lambda c: c["ts"], reverse=True)
+    chosen: list[dict] = []
+    for cat in plan:
+        for c in pool:
+            if c["cat"] == cat and c not in chosen:
+                chosen.append(c)
+                break
+    for c in pool:
+        if len(chosen) >= len(plan):
+            break
+        if c not in chosen:
+            chosen.append(c)
+    return chosen
+
+
 def run_once(seen: Seen) -> None:
-    first_run = len(seen) == 0
+    slot = current_slot()
+    plan = SLOT_PLANS[slot][:MAX_POSTS_PER_RUN]
     cands = fetch_candidates(seen)
-
-    if first_run:
-        # не заливаем канал старой лентой: всё, кроме самых свежих, помечаем как виденное
-        cands.sort(key=lambda c: c["ts"], reverse=True)
-        for c in cands[MAX_POSTS_PER_RUN:]:
-            seen.add(c["uid"])
-        cands = cands[:MAX_POSTS_PER_RUN]
-
     for c in cands:
         if not c["fresh"]:
             seen.add(c["uid"])
-    fresh = sorted((c for c in cands if c["fresh"]), key=lambda c: c["ts"])
+    fresh = [c for c in cands if c["fresh"]]
+    log.info("окно %s, свежих кандидатов: %d", slot, len(fresh))
 
     posted = 0
-    for c in fresh:
-        if posted >= MAX_POSTS_PER_RUN:
-            break
-        if not c["image"] or not c["summary"]:
-            img, desc = page_meta(c["link"])
-            c["image"] = c["image"] or img
-            c["summary"] = c["summary"] or clean(desc or "")
-        if not c["image"] and not POST_WITHOUT_IMAGE:
-            log.info("нет картинки, пропускаю: %s", c["title"])
-            seen.add(c["uid"])
-            continue
-        if send(c):
-            log.info("опубликовано: %s", c["title"])
-            posted += 1
-            seen.add(c["uid"])
-            time.sleep(3)
-        else:
-            log.error("не удалось отправить, повторю в следующий раз: %s", c["title"])
+    failed = 0
+    while posted < len(plan) and fresh and failed < 3:
+        for c in pick(fresh, plan[posted:]):
+            fresh.remove(c)
+            if not c["image"] or not c["summary"]:
+                img, desc = page_meta(c["link"])
+                c["image"] = c["image"] or img
+                c["summary"] = c["summary"] or clean(desc or "")
+            if not c["image"] and not POST_WITHOUT_IMAGE:
+                log.info("нет картинки, пропускаю: %s", c["title"])
+                seen.add(c["uid"])
+                continue
+            if send(c):
+                log.info("опубликовано [%s]: %s", c["cat"], c["title"])
+                posted += 1
+                seen.add(c["uid"])
+                time.sleep(3)
+            else:
+                failed += 1
+                log.error("не удалось отправить, повторю в следующий раз: %s", c["title"])
 
     seen.prune()
 
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    seen = Seen(STATE_PATH)
-    once = "--once" in sys.argv
-    while True:
-        try:
-            run_once(seen)
-        except Exception:
-            log.exception("ошибка в цикле")
-            if once:
-                sys.exit(1)
-        if once:
-            return
-        time.sleep(POLL_MINUTES * 60)
+    try:
+        run_once(Seen(STATE_PATH))
+    except Exception:
+        log.exception("ошибка")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
