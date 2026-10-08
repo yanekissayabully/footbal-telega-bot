@@ -137,6 +137,7 @@ def clean(text: str) -> str:
 
 def to_jpeg(data: bytes) -> bytes:
     im = Image.open(io.BytesIO(data)).convert("RGB")
+    im.thumbnail((2560, 2560))  # Telegram отклоняет слишком большие картинки
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=90)
     return buf.getvalue()
@@ -303,7 +304,7 @@ def send(item: dict) -> bool:
             log.warning("загрузка файлом не прошла: %s", r.text[:200])
         except (requests.RequestException, OSError) as e:
             log.warning("не скачалась/не сконвертировалась картинка: %s", e)
-    if POST_WITHOUT_IMAGE:
+    if item["image"] or POST_WITHOUT_IMAGE:  # фото не приняли — лучше текст, чем потерять пост
         r = session.post(f"{api}/sendMessage", timeout=30, data={
             "chat_id": CHANNEL_ID, "text": caption, "parse_mode": "HTML"})
         if r.ok:
