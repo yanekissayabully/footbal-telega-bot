@@ -27,7 +27,6 @@ MAX_PREVIEWS_PER_RUN = int(os.getenv("MAX_PREVIEWS_PER_RUN", "1"))
 MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "16"))
 POST_DELAY_MIN = float(os.getenv("POST_DELAY_MIN", "15"))  # пауза между постами, минуты
 POST_DELAY_MAX = float(os.getenv("POST_DELAY_MAX", "30"))
-SLOT_OVERRIDE = os.getenv("SLOT", "").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or "gpt-4o-mini"
 FOOTER = os.getenv("FOOTER", "").strip()
@@ -112,15 +111,13 @@ CATEGORY_RES = [
 # «europa» в плане = любая из этих категорий (топ-5 лиг, ЛЧ и общая Европа)
 GROUPS = {"europa": {"epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl", "eur"}}
 
-# что постим в каждое окно (время по Бразилии); если категории пусты — добираем любыми
-SLOT_PLANS = {
-    "morning": ["europa", "europa", "br", "mercado"],
-    "lunch": ["br", "europa", "latam", "escandalo"],
-    "evening": ["br", "europa", "fofoca", "mercado"],
-}
+# Когда выходят посты (время по Бразилии): к каждому моменту должно быть выложено столько постов,
+# сколько моментов уже наступило. Если запуск GitHub опоздал или пропущен — следующий догонит,
+# но не больше одного поста за запуск, так что пачкой не сыпется.
+DUE_TIMES = [(9, 0), (11, 0), (13, 0), (16, 0), (20, 0)]
 
-# накопительный лимит к концу окна: к обеду не больше 4, к вечеру 5 (невыбранное переносится дальше)
-SLOT_CAPS = {"morning": 2, "lunch": 4, "evening": 5}
+# Очередь рубрик; каждый день сдвигается, так что рубрики чередуются
+DAY_PLAN = ["europa", "br", "mercado", "europa", "latam", "br", "escandalo", "europa", "fofoca", "br"]
 
 RUBRICS = {
     "br": ("🇧🇷", "FUTEBOL BRASILEIRO", "#Brasileirão #FutebolBrasileiro"),
@@ -267,13 +264,6 @@ def classify(text: str, default: str) -> str:
         if rx.search(text):
             return name
     return default
-
-
-def current_slot() -> str:
-    if SLOT_OVERRIDE in SLOT_PLANS:
-        return SLOT_OVERRIDE
-    hour = datetime.now(BRT).hour
-    return "morning" if hour < 12 else "lunch" if hour < 17 else "evening"
 
 
 def published_ts(entry) -> float:
@@ -586,36 +576,38 @@ def pick(fresh: list[dict], plan: list[str]) -> list[dict]:
     return chosen
 
 
+def posts_due() -> int:
+    now = datetime.now(BRT)
+    return sum((now.hour, now.minute) >= t for t in DUE_TIMES)
+
+
 def run_once(seen: Seen) -> None:
-    slot = current_slot()
     cands = fetch_candidates(seen)
     for c in cands:
         if not c["fresh"]:
             seen.add(c["uid"])
     fresh = [c for c in cands if c["fresh"]]
-    log.info("окно %s, свежих кандидатов: %d", slot, len(fresh))
+    log.info("свежих кандидатов: %d; сегодня постов %d из %d, по графику должно быть %d",
+             len(fresh), seen.posts_today(), DAILY_LIMIT, posts_due())
 
     left = DAILY_LIMIT - seen.posts_today()
-    log.info("сегодня уже %d из %d постов", seen.posts_today(), DAILY_LIMIT)
     if left <= 0:
         seen.prune()
         return
 
-    previews = 0
+    # прогрев матча привязан ко времени игры, поэтому выходит независимо от графика (но входит в лимит)
     try:
-        previews = post_previews(seen, cands, min(MAX_PREVIEWS_PER_RUN, left))
+        post_previews(seen, cands, min(MAX_PREVIEWS_PER_RUN, left))
     except Exception:
         log.exception("ошибка в прогревах")
 
-    # прогревы входят в лимит; остаток окна и дня отдаём новостям
-    base = SLOT_PLANS[slot]
-    shift = datetime.now(BRT).timetuple().tm_yday % len(base)  # меняем рубрики день ото дня
-    plan = (base[shift:] + base[:shift])[:max(0, min(SLOT_CAPS[slot], DAILY_LIMIT) - seen.posts_today())]
-
-    posted = 0
-    failed = 0
-    while posted < len(plan) and fresh and failed < 3:
-        for c in pick(fresh, plan[posted:]):
+    # новость — не больше одной за запуск и только если по графику пора
+    if seen.posts_today() < min(posts_due(), DAILY_LIMIT):
+        day = datetime.now(BRT).timetuple().tm_yday
+        entry = DAY_PLAN[(day * DAILY_LIMIT + seen.posts_today()) % len(DAY_PLAN)]
+        failed = 0
+        while fresh and failed < 3:
+            c = pick(fresh, [entry])[0]
             fresh.remove(c)
             if not c["image"] or not c["summary"]:
                 img, desc = page_meta(c["link"])
@@ -630,12 +622,11 @@ def run_once(seen: Seen) -> None:
                 continue
             if send(c):
                 log.info("опубликовано [%s]: %s", c["cat"], c["title"])
-                posted += 1
                 seen.add(c["uid"])
                 seen.count_post()
-            else:
-                failed += 1
-                log.error("не удалось отправить, повторю в следующий раз: %s", c["title"])
+                break
+            failed += 1
+            log.error("не удалось отправить, повторю в следующий раз: %s", c["title"])
 
     seen.prune()
 

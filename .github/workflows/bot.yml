@@ -2,8 +2,8 @@ name: football-bot
 
 on:
   schedule:
-    # 09:05, 13:05 и 20:05 по Бразилии (UTC-3)
-    - cron: "5 12,16,23 * * *"
+    # GitHub запускает cron «по возможности»; бот сам решает по бразильскому времени, пора ли постить
+    - cron: "*/20 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +16,7 @@ permissions:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
