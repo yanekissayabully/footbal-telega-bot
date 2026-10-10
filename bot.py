@@ -437,7 +437,7 @@ def big_count(*names: str) -> int:
 
 
 def fetch_top_matches() -> list[dict]:
-    """Матчи топ-уровня, которые начнутся через 20 минут – 9 часов."""
+    """Матчи топ-уровня, которые начнутся через 20 минут – 5 часов."""
     now = datetime.now(timezone.utc)
     dates = {now.strftime("%Y%m%d"), (now + timedelta(days=1)).strftime("%Y%m%d")}
     found: dict[str, dict] = {}
@@ -463,7 +463,7 @@ def fetch_top_matches() -> list[dict]:
                     continue
                 wait = (kickoff - now).total_seconds() / 3600
                 big = big_count(home["displayName"], away["displayName"])
-                if state != "pre" or not (0.33 <= wait <= 9) or big < (1 if one_is_enough else 2):
+                if state != "pre" or not (0.33 <= wait <= 5) or big < (1 if one_is_enough else 2):
                     continue
                 found[ev["id"]] = {"id": ev["id"], "league": league, "kickoff": kickoff, "big": big,
                                    "home": home, "away": away, "venue": venue}
@@ -596,10 +596,12 @@ def run_once(seen: Seen) -> None:
         return
 
     # прогрев матча привязан ко времени игры, поэтому выходит независимо от графика (но входит в лимит)
-    try:
-        post_previews(seen, cands, min(MAX_PREVIEWS_PER_RUN, left))
-    except Exception:
-        log.exception("ошибка в прогревах")
+    # и только в бодрствующие часы по Бразилии, чтобы не будить канал ночью
+    if 8 <= datetime.now(BRT).hour < 23:
+        try:
+            post_previews(seen, cands, min(MAX_PREVIEWS_PER_RUN, left))
+        except Exception:
+            log.exception("ошибка в прогревах")
 
     # новость — не больше одной за запуск и только если по графику пора
     if seen.posts_today() < min(posts_due(), DAILY_LIMIT):
