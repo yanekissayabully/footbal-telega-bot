@@ -22,13 +22,13 @@ load_dotenv()
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL_ID = os.environ["CHANNEL_ID"]
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "5"))  # максимум постов в сутки (по Бразилии), прогревы входят
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "3"))  # максимум постов в сутки (по Бразилии), прогревы входят
 MAX_PREVIEWS_PER_RUN = int(os.getenv("MAX_PREVIEWS_PER_RUN", "1"))
 MAX_AGE_HOURS = float(os.getenv("MAX_AGE_HOURS", "16"))
 POST_DELAY_MIN = float(os.getenv("POST_DELAY_MIN", "15"))  # пауза между постами, минуты
 POST_DELAY_MAX = float(os.getenv("POST_DELAY_MAX", "30"))
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or "gpt-4o-mini"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "").strip() or "gpt-5.4"
 FOOTER = os.getenv("FOOTER", "").strip()
 POST_WITHOUT_IMAGE = os.getenv("POST_WITHOUT_IMAGE", "0") == "1"
 
@@ -114,10 +114,10 @@ GROUPS = {"europa": {"epl", "laliga", "seriea", "bundesliga", "ligue1", "ucl", "
 # Когда выходят посты (время по Бразилии): к каждому моменту должно быть выложено столько постов,
 # сколько моментов уже наступило. Если запуск GitHub опоздал или пропущен — следующий догонит,
 # но не больше одного поста за запуск, так что пачкой не сыпется.
-DUE_TIMES = [(9, 0), (11, 0), (13, 0), (16, 0), (20, 0)]
+DUE_TIMES = [(10, 0), (15, 0), (20, 0)]
 
 # Очередь рубрик; каждый день сдвигается, так что рубрики чередуются
-DAY_PLAN = ["europa", "br", "mercado", "europa", "latam", "br", "escandalo", "europa", "fofoca", "br"]
+DAY_PLAN = ["europa", "europa", "mercado", "europa", "br", "escandalo", "europa", "fofoca", "europa", "mercado"]
 
 RUBRICS = {
     "br": ("🇧🇷", "FUTEBOL BRASILEIRO", "#Brasileirão #FutebolBrasileiro"),
@@ -135,30 +135,36 @@ RUBRICS = {
     "preview": ("⏰", "PRÉ-JOGO", "#PréJogo #Futebol"),
 }
 
-SYSTEM_PROMPT = (
-    "Você é redator de um canal de Telegram de futebol para o público brasileiro. "
-    "Reescreva a notícia recebida em português do Brasil, com texto próprio e envolvente, "
-    "tom de torcedor bem informado, sem copiar frases do original. "
-    "O material pode estar em inglês ou espanhol: traduza e reescreva. "
-    "Regras: use SOMENTE fatos presentes no material, não invente nada (placares, nomes, valores); "
-    "em temas de polêmica ou vida pessoal, deixe claro quando algo é alegação ou 'segundo a imprensa' "
-    "e nunca afirme como fato o que não está confirmado; "
-    "não cite o veículo de origem, não inclua links nem hashtags; "
-    "no máximo 1 ou 2 emojis relevantes no corpo. "
-    'Responda em JSON: {"title": "manchete curta e chamativa, até 90 caracteres", '
-    '"body": "2 a 4 frases curtas, até 450 caracteres"}'
+PERSONA = (
+    "Você é a voz do canal 'Resenha Football' no Telegram: um comentarista de futebol sarcástico, ácido e "
+    "muito bem informado. Pense no ChatGPT 'Monday': seco, meio cansado do mundo, humor deadpan, ironia fina, "
+    "frases curtas e um fecho que bate. Fala com a torcida brasileira como num grupo de resenha: coloquial, "
+    "zoeira de boteco, gírias leves (sem forçar 'mano' em toda frase). "
+    "ESTILO: abra com um gancho que prende; ironize o hype, a situação, o clube, a cartolagem ou a mídia; "
+    "exagero cômico e comparações inesperadas; uma piada boa vale mais que três fracas. "
+    "LIMITES: o sarcasmo mira em situações, clubes, hype e decisões — nunca em pessoas por aparência, raça, "
+    "gênero, orientação, religião, doença, lesão grave, luto ou família/filhos; em polêmica e fofoca deixe claro "
+    "que é 'segundo a imprensa' ou alegação e jamais afirme crime ou acusação como fato; sem xingamento pesado. "
+    "FATOS: use SOMENTE o que está no material; não invente números, citações, placares, nomes ou datas; "
+    "se o material for pobre, faça graça com a falta de informação em vez de inventar. "
+    "Não cite o veículo de origem, sem links, sem hashtags, no máximo 2 emojis. "
 )
 
-PREVIEW_PROMPT = (
-    "Você é redator de um canal de Telegram de futebol para o público brasileiro e vai escrever o "
-    "'aquecimento' (pré-jogo) de uma partida importante que começa em poucas horas. "
-    "Tom animado, de quem está ansioso pela bola rolar, convidando a torcida a comentar. "
-    "Regras: use SOMENTE os fatos fornecidos (competição, times, horário de Brasília, estádio, contexto); "
-    "não invente estatísticas, retrospecto, escalações, lesões ou classificação; "
-    "o horário de Brasília deve aparecer no texto; não cite veículos nem inclua links ou hashtags; "
-    "no máximo 2 emojis. "
-    'Responda em JSON: {"title": "chamada curta e empolgante, até 90 caracteres", '
-    '"body": "2 a 3 frases curtas, até 350 caracteres"}'
+SYSTEM_PROMPT = PERSONA + (
+    "Reescreva a notícia recebida (pode vir em inglês ou espanhol: traduza) com texto totalmente próprio. "
+    'Responda em JSON: {"title": "manchete com gancho, até 90 caracteres", '
+    '"body": "2 a 4 frases curtas, até 420 caracteres", '
+    '"verdict": "uma linha, até 110 caracteres, o veredito debochado que fecha o post"}'
+)
+
+PREVIEW_PROMPT = PERSONA + (
+    "Escreva o 'aquecimento' (pré-jogo) de uma partida que começa em poucas horas: crie expectativa com "
+    "deboche, convide a torcida a opinar. Use SOMENTE os fatos fornecidos (competição, times, horário de "
+    "Brasília, estádio, contexto); sem estatísticas, retrospecto, escalações, lesões ou classificação inventados; "
+    "o horário de Brasília deve aparecer no texto. "
+    'Responda em JSON: {"title": "chamada empolgante, até 90 caracteres", '
+    '"body": "2 a 3 frases curtas, até 350 caracteres", '
+    '"verdict": "uma linha, até 110 caracteres, palpite ou provocação final"}'
 )
 
 log = logging.getLogger("bot")
@@ -297,8 +303,13 @@ def fetch_candidates(seen: Seen) -> list[dict]:
             text = f"{title} {cats}"
             if need_filter and not FOOTBALL_RE.search(f"{text} {summary}"):
                 continue
+            if "globoesporte.com" in title.lower():
+                continue  # служебные страницы матчей без новости
+            score = star_score(f"{title} {summary}")
+            if score < 1 and default_cat != "ucl":
+                continue  # случайные клубы и игроки не нужны — только звёзды и гранды
             seen_now.add(uid)
-            out.append({"uid": uid, "link": link, "title": title, "summary": summary,
+            out.append({"score": score, "uid": uid, "link": link, "title": title, "summary": summary,
                         "ts": ts, "fresh": ts >= cutoff, "image": entry_image(e),
                         "cat": default_cat if fixed else classify(text, default_cat)})
     return out
@@ -306,29 +317,31 @@ def fetch_candidates(seen: Seen) -> list[dict]:
 
 # ---------- OpenAI ----------
 
-def ai_chat(system: str, material: str) -> tuple[str, str] | None:
+def ai_chat(system: str, material: str) -> dict | None:
     try:
         r = session.post(
-            "https://api.openai.com/v1/chat/completions", timeout=60,
+            "https://api.openai.com/v1/chat/completions", timeout=120,
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
             json={"model": OPENAI_MODEL, "response_format": {"type": "json_object"},
                   "messages": [{"role": "system", "content": system},
                                {"role": "user", "content": material}]})
         r.raise_for_status()
         data = json.loads(r.json()["choices"][0]["message"]["content"])
-        title, body = clean(data["title"]), clean(data["body"])
-    except (requests.RequestException, KeyError, IndexError, ValueError) as e:
+        res = {k: clean(str(data.get(k, ""))) for k in ("title", "body", "verdict")}
+    except (requests.RequestException, KeyError, IndexError, ValueError, AttributeError) as e:
         log.error("OpenAI не ответил нормально: %s", e)
         return None
-    return (title[:120], body[:600]) if title and body else None
+    if not res["title"] or not res["body"]:
+        return None
+    return {"title": res["title"][:120], "summary": res["body"][:600], "verdict": res["verdict"][:160]}
 
 
 def ai_rewrite(item: dict) -> bool:
-    """Переписывает заголовок и текст новости. False — если не вышло."""
-    res = ai_chat(SYSTEM_PROMPT, f"Categoria: {item['cat']}\nTítulo: {item['title']}\nResumo: {item['summary']}")
+    """Переписывает заголовок и текст новости в фирменном стиле. False — если не вышло."""
+    res = ai_chat(SYSTEM_PROMPT, "\n".join([f"Categoria: {item['cat']}", f"Título: {item['title']}", f"Resumo: {item['summary']}"]))
     if not res:
         return False
-    item["title"], item["summary"] = res
+    item.update(res)
     return True
 
 
@@ -336,15 +349,17 @@ def ai_rewrite(item: dict) -> bool:
 
 def build_caption(item: dict) -> str:
     emoji, name, tags = RUBRICS.get(item["cat"], RUBRICS["br"])
-    head = f"{emoji} <b>{name}</b>\n\n<b>{html.escape(item['title'])}</b>"
-    tail = f"\n\n{tags}" + (f"\n\n{FOOTER}" if FOOTER else "")
-    room = CAPTION_LIMIT - len(head) - len(tail) - 4
+    gap = chr(10) * 2
+    head = f"{emoji} <b>{name}</b>{gap}<b>{html.escape(item['title'])}</b>"
+    verdict = f"{gap}🎤 <i>{html.escape(item['verdict'])}</i>" if item.get("verdict") else ""
+    tail = f"{gap}{tags}" + (f"{gap}{FOOTER}" if FOOTER else "")
+    room = CAPTION_LIMIT - len(head) - len(verdict) - len(tail) - 4
     body = ""
     summary = item["summary"]
     if summary and summary != item["title"] and room > 40:
-        s = summary if len(summary) <= room else summary[: room - 1].rsplit(" ", 1)[0] + "…"
-        body = "\n\n" + html.escape(s)
-    return head + body + tail
+        text = summary if len(summary) <= room else summary[: room - 1].rsplit(" ", 1)[0] + "…"
+        body = gap + html.escape(text)
+    return head + body + verdict + tail
 
 
 _sent = 0
@@ -426,6 +441,24 @@ BIG_TEAMS = [
     "botafogo", "gremio", "internacional", "cruzeiro", "atletico-mg", "atletico mineiro",
     "boca juniors", "river plate",
 ]
+
+
+STARS = [
+    "messi", "cristiano", "ronaldo", "neymar", "mbapp", "haaland", "vinicius", "bellingham", "yamal",
+    "salah", "lewandowski", "harry kane", "de bruyne", "modric", "benzema", "rodrygo", "raphinha",
+    "endrick", "pedri", "gavi", "rashford", "griezmann", "saka", "odegaard", "rodri", "dembele",
+    "osimhen", "lautaro", "julian alvarez", "enzo fernandez", "casemiro", "alisson", "ederson",
+    "marquinhos", "martinelli", "gabriel jesus", "richarlison", "paqueta", "kvaratskhelia", "musiala",
+    "guardiola", "ancelotti", "mourinho", "klopp", "arteta", "xavi", "simeone", "flick", "tuchel",
+    "amorim", "ronaldinho", "maradona", "ibrahimovic", "selecao brasileira", "copa do mundo",
+    "ballon d'or", "bola de ouro",
+]
+
+
+def star_score(text: str) -> int:
+    """Чем больше звёзд и грандов в тексте, тем интереснее (звезда = 2, клуб = 1)."""
+    t = norm(text)
+    return sum(2 for x in STARS if x in t) + sum(1 for x in BIG_TEAMS if x in t)
 
 
 def norm(s: str) -> str:
@@ -527,13 +560,17 @@ def preview_item(m: dict, news: list[dict]) -> dict:
     if OPENAI_API_KEY:
         names = [norm(m["home"].get("shortDisplayName", "")), norm(m["away"].get("shortDisplayName", ""))]
         context = [n["title"] for n in news if any(x and x in norm(n["title"]) for x in names)][:3]
-        facts = (f"Competição: {m['league']}\nMandante: {home}\nVisitante: {away}\n"
-                 f"Horário (Brasília): {day.lower()} às {hhmm}\nEstádio: {m['venue'] or 'não informado'}\n"
-                 f"Notícias recentes (contexto): {' | '.join(context) or 'nenhuma'}")
+        lines = [f"Competição: {m['league']}", f"Mandante: {home}", f"Visitante: {away}",
+                 f"Horário (Brasília): {day.lower()} às {hhmm}", f"Estádio: {m['venue'] or 'não informado'}"]
+        if context:
+            lines.append(f"Notícias recentes (contexto): {' | '.join(context)}")
+        else:
+            lines.append("(Não mencione falta de contexto ou de notícias; foque no clima do jogo.)")
+        facts = chr(10).join(lines)
         res = ai_chat(PREVIEW_PROMPT, facts)
         if not res:
             return {}
-        item["title"], item["summary"] = res
+        item.update(res)
     return item
 
 
@@ -560,7 +597,7 @@ def post_previews(seen: Seen, news: list[dict], limit: int) -> int:
 
 def pick(fresh: list[dict], plan: list[str]) -> list[dict]:
     """По одной свежей новости на пункт плана (разные рубрики), остаток добираем любыми."""
-    pool = sorted(fresh, key=lambda c: c["ts"], reverse=True)
+    pool = sorted(fresh, key=lambda c: (min(c["score"], 4), c["ts"]), reverse=True)
     chosen: list[dict] = []
     for entry in plan:
         allowed = GROUPS.get(entry, {entry})
